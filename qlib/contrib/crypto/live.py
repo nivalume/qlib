@@ -17,7 +17,9 @@ Each day, after ``jarvis-data sync`` and ``jarvis-data dump qlib``:
    - at least ``min_coverage`` of the universe's members have a close on the decision day and
      a finite score (a partial dump);
    - no raw feature is NaN for more than ``max_feature_nan`` of the members (a field the data
-     does not have yet, such as ``$funding`` before the month's archive).
+     does not have yet, such as ``$funding`` before the month's archive);
+   - no two scores are equal at the edge of the long or short side (a model with few distinct
+     outputs): the names held there would be chosen by instrument name. ``--allow-ties`` trades it.
 
 4. Build the targets with the backtest's ``LongShortPortfolio``, from the weights held now
    (``--current``, for its ``buffer``), and write them atomically to ``targets-<day>.json`` and
@@ -132,6 +134,7 @@ def generate_targets(
     min_coverage: float = 0.9,
     max_feature_nan: float = 0.5,
     max_age_days: Optional[int] = 2,
+    allow_ties: bool = False,
     trusted: bool = False,
     now: Optional[pd.Timestamp] = None,
 ) -> Targets:
@@ -203,6 +206,13 @@ def generate_targets(
             problems.append(f"only {priced} of {len(members)} members have a close on {day.date()}")
         if scored < min_coverage * len(members):
             problems.append(f"only {scored} of {len(members)} members have a score on {day.date()}")
+    tied = portfolio.boundary_tied(scores)
+    checks["boundary_tied"] = bool(tied)
+    if tied and not allow_ties:
+        problems.append(
+            "two scores are equal at the edge of the long or short side: the names held there would be chosen by "
+            "instrument name, not by the model (a model with few distinct outputs; allow_ties=True trades it anyway)"
+        )
     worst = _worst_feature(dataset, day)
     if worst is not None:
         checks["worst_feature"] = {"name": worst[0], "nan_share": round(worst[1], 4), "max": max_feature_nan}
@@ -296,6 +306,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--min-coverage", type=float, default=0.9, help="share of members that must be scored")
     parser.add_argument("--max-feature-nan", type=float, default=0.5, help="largest NaN share of a raw feature")
     parser.add_argument("--max-age-days", type=int, default=2, help="oldest decision day accepted; -1 for any")
+    parser.add_argument("--allow-ties", action="store_true", help="trade even if scores tie at the edge of a side")
     parser.add_argument("--trusted", action="store_true", help="load the recorder's model and dataset pickles")
     args = parser.parse_args(argv)
 
@@ -332,6 +343,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_coverage=args.min_coverage,
         max_feature_nan=args.max_feature_nan,
         max_age_days=None if args.max_age_days < 0 else args.max_age_days,
+        allow_ties=args.allow_ties,
         trusted=args.trusted,
     )
     if not targets.ok:

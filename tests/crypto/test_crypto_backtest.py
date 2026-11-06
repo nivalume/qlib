@@ -87,6 +87,9 @@ def test_the_return_is_the_label_of_the_targets():
         trade_day = mkt.days[t + 2]
         net = result.report.loc[trade_day, "return"]
         assert net == pytest.approx(expected, abs=1e-12), day
+    # a position that is sold leaves nothing behind: 4 names a side, counted exactly
+    assert (result.report["n_long"] == 4).all() and (result.report["n_short"] == 4).all()
+    assert not ((result.weights.abs() > 0) & (result.weights.abs() < 1e-9)).to_numpy().any()
     assert result.report["gross_exposure"].iloc[:-1].tolist() == pytest.approx([1.5] * (len(result.report) - 1))
     assert result.report["net_exposure"].iloc[:-1].tolist() == pytest.approx([0.1] * (len(result.report) - 1))
 
@@ -171,14 +174,40 @@ def test_vwap_trades_through_the_day():
     report = result.report.set_index(result.report.index.strftime("%m-%d"))
     # 01-02: buys 500,000 of A at 105 (4761.9 coins), marked at 100 at the close; funding on half
     assert report.loc["01-02", "return"] == pytest.approx((500_000 / 105 * (100 - 105) - 250_000 * 0.001) / 1e6)
-    # 01-03: A held from the close of 100 to 110, and the rebalance at 108 is marked to 110
+    # 01-03: the coins held earn from the close of 100 to 110; the target is half the equity in
+    # coins at that day's vwap of 108, and the coins sold or bought at 108 are marked to 110
     equity = 1e6 * (1 + report.loc["01-02", "return"])
-    held_a = 500_000 / 105 * 100
-    trade_a = 0.5 * equity - held_a
-    expected = held_a * 0.1 + trade_a / 108 * (110 - 108)
+    held_a = 500_000 / 105
+    target_a = 0.5 * equity / 108
+    expected = held_a * (110 - 100) + (target_a - held_a) * (110 - 108)
     assert report.loc["01-03", "return"] == pytest.approx(expected / equity)
     with pytest.raises(ValueError, match="needs delay >= 1"):
         run(mkt, signal(mkt.days[:2], A=1.0, B=-1.0), deal_price="vwap", delay=0)
+
+
+def test_a_position_sold_out_at_vwap_leaves_nothing_behind():
+    mkt = market(
+        {"A": [100, 100, 110, 110], "B": [100] * 4, "C": [100] * 4},
+        vwap={"A": [100, 105, 108, 110], "B": [100] * 4, "C": [100] * 4},
+    )
+    index = pd.MultiIndex.from_product([mkt.days[:2], ["A", "B", "C"]], names=["datetime", "instrument"])
+    scores = pd.Series([3.0, 1.0, 2.0, 2.0, 1.0, 3.0], index=index)  # long A, then long C: A is sold out
+    result = run(mkt, scores, deal_price="vwap")
+    assert result.weights.loc["2024-01-03", "A"] == 0
+    assert (result.report["n_long"] == 1).all() and (result.report["n_short"] == 1).all()
+    sold = result.trades[(result.trades["instrument"] == "A") & (result.trades["datetime"] == "2024-01-03")]
+    assert sold["value"].iloc[0] == pytest.approx(-500_000 / 105 * 108)  # all the coins, at the vwap of 108
+
+
+def test_ties_at_the_edge_of_a_side_are_reported():
+    mkt = market({f"S{i}": [100] * 6 for i in range(6)})
+    flat = signal(mkt.days[:3], **{f"S{i}": 1.0 for i in range(6)})
+    result = run(mkt, flat, portfolio=LongShortPortfolio(n_long=2, n_short=2, min_names=4))
+    rebalanced = result.report["rebalanced"]
+    assert result.report.loc[rebalanced, "tied_boundary"].all() and result.summary()["tied_boundary"] == 1.0
+    distinct = signal(mkt.days[:3], **{f"S{i}": float(i) for i in range(6)})
+    result = run(mkt, distinct, portfolio=LongShortPortfolio(n_long=2, n_short=2, min_names=4))
+    assert not result.report["tied_boundary"].any() and result.summary()["tied_boundary"] == 0.0
 
 
 def test_positions_drift_between_rebalances():

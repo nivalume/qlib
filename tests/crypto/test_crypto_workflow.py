@@ -195,6 +195,25 @@ def test_live_refuses_stale_or_untrusted_inputs(trained):
     assert any("have a close" in problem for problem in partial.problems)
 
 
+def test_live_refuses_scores_that_tie_at_the_edge_of_a_side(trained, monkeypatch):
+    from qlib.contrib.model.linear import LinearModel
+
+    session, recorder = trained
+    last = session.calendar[-1]
+    original = LinearModel.predict
+
+    def constant(self, dataset, segment="test"):
+        return original(self, dataset, segment) * 0 + 1.0  # a model that cannot tell names apart
+
+    monkeypatch.setattr(LinearModel, "predict", constant)
+    now = last + pd.Timedelta(1, unit="D")
+    refused = live.generate_targets(recorder, trusted=True, now=now)
+    assert not refused.ok and "equal at the edge" in refused.problems[0] and refused.weights.empty
+    assert refused.checks["boundary_tied"] is True
+    allowed = live.generate_targets(recorder, trusted=True, now=now, allow_ties=True)
+    assert allowed.ok and allowed.checks["boundary_tied"] is True and len(allowed.weights) > 0
+
+
 def test_the_live_command(trained, tmp_path):
     session, recorder = trained
     out = tmp_path / "targets"

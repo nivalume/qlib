@@ -51,6 +51,16 @@ def test_equal_scores_rank_by_name_whatever_the_order():
         rank(pd.Series([1.0, 2.0], index=["A", "A"]))
 
 
+def test_ties_at_the_edge_of_a_side_are_detected():
+    book = LongShortPortfolio(n_long=2, n_short=2, min_names=4)
+    assert not book.boundary_tied(SCORES)
+    assert book.boundary_tied(pd.Series({"A": 5.0, "B": 4.0, "C": 4.0, "D": 2.0, "E": 1.0}))  # 2nd and 3rd best
+    assert book.boundary_tied(pd.Series({"A": 5.0, "B": 4.0, "C": 3.0, "D": 3.0, "E": 1.0}))  # 2nd and 3rd worst
+    # equal scores inside a side are harmless: both are held either way
+    assert not book.boundary_tied(pd.Series({"A": 5.0, "B": 5.0, "C": 3.0, "D": 1.0, "E": 1.0}))
+    assert not book.boundary_tied(pd.Series({"A": 1.0, "B": 1.0}))  # too few names: nothing is held
+
+
 def test_the_buffer_keeps_held_names():
     book = LongShortPortfolio(n_long=2, n_short=2, buffer=1, min_names=4)
     held = pd.Series({"C": 0.25, "D": -0.25})

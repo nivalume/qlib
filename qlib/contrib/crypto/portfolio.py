@@ -119,6 +119,17 @@ class LongShortPortfolio:
                 n_short = min(n_short, scored - n_long, scored // 2)
         return n_long, n_short
 
+    def boundary_tied(self, scores: pd.Series) -> bool:
+        """Whether two scores are equal at the edge of the long or the short side: which of the
+        equal names is held there is then decided by instrument name, not by the scores. A model
+        that outputs few distinct values (a handful of trees) does this."""
+        values = pd.Series(scores, dtype="float64").to_numpy()
+        values = np.sort(values[np.isfinite(values)])
+        n_long, n_short = self.sizes(len(values))
+        if 0 < n_long < len(values) and values[-n_long] == values[-n_long - 1]:
+            return True
+        return 0 < n_short < len(values) and values[n_short - 1] == values[n_short]
+
     def target(self, scores: pd.Series, current: Optional[pd.Series] = None) -> pd.Series:
         """The target weight of each instrument to hold, from one day's ``scores`` (indexed by
         instrument; NaN and infinite scores are left out). ``current`` holds the weights held now:

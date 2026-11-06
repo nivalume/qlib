@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -94,6 +94,7 @@ class BacktestResult:
             "gross_exposure": float(report["gross_exposure"].mean()),
             "net_exposure": float(report["net_exposure"].mean()),
             "funding_missing": float(report["funding_missing"].sum() / held.sum()) if held.sum() else 0.0,
+            "tied_boundary": float(report["tied_boundary"].sum() / max(1, report["rebalanced"].sum())),
             "final_account": float(report["account"].iloc[-1]),
         }
 
@@ -232,23 +233,30 @@ def backtest_long_short(
     weight_rows: List[np.ndarray] = []
     trade_rows: List[Dict[str, object]] = []
 
-    def targets(t: int, current: np.ndarray, equity: float) -> np.ndarray:
-        """The trade toward the targets of the scores decided for day t."""
+    def targets(t: int, equity: float) -> Tuple[np.ndarray, np.ndarray, bool]:
+        """The trade toward the targets of the scores decided for day t: its notional at the deal
+        price, its quantity, and whether scores tie at the edge of a side. The quantity is the
+        target quantity less the held one, so a position sold out is exactly 0."""
         day_scores = by_day[executions[t]]
         leaving = [names[j] for j in np.flatnonzero(delist[t])]
         if leaving:
             day_scores = day_scores.drop(labels=[name for name in leaving if name in day_scores.index])
         weights = np.zeros(n)
-        held = np.abs(current) > 0
-        now = pd.Series(current[held] / equity, index=[names[j] for j in np.flatnonzero(held)])
+        held = quantity != 0
+        now = pd.Series(quantity[held] * mark[held] / equity, index=[names[j] for j in np.flatnonzero(held)])
         for name, weight in portfolio.target(day_scores, current=now).items():
             weights[column[name]] = weight
-        wanted = weights * equity - current
         deal = close[t] if deal_price == "close" else vwap[t]
         tradable = np.isfinite(close[t]) & np.isfinite(deal) & (deal > 0) & ~delist[t]
-        wanted[~tradable] = 0.0
-        wanted[np.abs(wanted) < _DUST * equity] = 0.0
-        return costs.cap(wanted, adv[t])
+        price = np.where(tradable, deal, 1.0)
+        change = np.where(tradable, weights * equity / price - quantity, 0.0)
+        notional = change * price
+        change[np.abs(notional) < _DUST * equity] = 0.0
+        notional = change * price
+        capped = costs.cap(notional, adv[t])
+        scale = np.divide(capped, notional, out=np.zeros(n), where=notional != 0)
+        change = np.where(capped == notional, change, change * scale)
+        return capped, change, portfolio.boundary_tied(day_scores)
 
     for t in range(start_pos, end_pos + 1):
         day = days[t]
@@ -259,17 +267,19 @@ def backtest_long_short(
         priced = np.isfinite(price)
         deal = price if deal_price == "close" else vwap[t]
         trade = np.zeros(n)
+        change = np.zeros(n)  # the quantity traded
+        tied = False
         rebalanced = t in executions and not ruined
 
         if rebalanced and deal_price == "vwap":
-            trade = targets(t, value, previous)
+            trade, change, tied = targets(t, previous)
 
         # 1. mark at the close
         moved = held & priced
         pnl = float(np.sum(quantity[moved] * (price[moved] - mark[moved])))
         if deal_price == "vwap":
-            traded = trade != 0
-            pnl += float(np.sum(trade[traded] / deal[traded] * (price[traded] - deal[traded])))
+            traded = change != 0
+            pnl += float(np.sum(change[traded] * (price[traded] - deal[traded])))
 
         # 2. funding on what was held through the day
         rate = funding[t]
@@ -282,15 +292,14 @@ def backtest_long_short(
         funding_pnl = -float(np.sum(through[exposed & known] * rate[exposed & known]))
 
         if deal_price == "vwap":
-            quantity = quantity + np.where(trade != 0, trade / np.where(trade != 0, deal, 1.0), 0.0)
+            quantity = quantity + change
         mark = np.where(priced, price, mark)
         equity = previous + pnl + funding_pnl
 
         # 3. trade toward the targets at the close
         if rebalanced and deal_price == "close" and equity > 0:
-            now = np.where(quantity != 0, quantity * np.where(quantity != 0, mark, 0.0), 0.0)
-            trade = targets(t, now, equity)
-            quantity = quantity + np.where(trade != 0, trade / np.where(trade != 0, deal, 1.0), 0.0)
+            trade, change, tied = targets(t, equity)
+            quantity = quantity + change
 
         # 4. close what is delisted today, at its last mark
         forced = delist[t] & (quantity != 0)
@@ -348,6 +357,7 @@ def backtest_long_short(
                 "n_short": int((weights < 0).sum()),
                 "funding_missing": int(missing.sum()),
                 "rebalanced": bool(rebalanced),
+                "tied_boundary": bool(tied),
             }
         )
         weight_rows.append(weights)
@@ -361,6 +371,12 @@ def backtest_long_short(
         logger.warning(
             f"$funding was missing for {int(report['funding_missing'].sum())} position-days "
             f"(the last on {report.index[report['funding_missing'] > 0][-1].date()}): they were charged nothing"
+        )
+    tied_days = int(report["tied_boundary"].sum())
+    if tied_days:
+        logger.warning(
+            f"On {tied_days} of {int(report['rebalanced'].sum())} rebalance days two scores were equal at the edge "
+            "of the long or short side: the names held there were chosen by instrument name, not by the model"
         )
     config = {
         "portfolio": portfolio.to_dict(),
