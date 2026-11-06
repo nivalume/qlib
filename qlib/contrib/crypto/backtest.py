@@ -173,6 +173,12 @@ def backtest_long_short(
         raise ValueError(f"account must be a positive number, not {account!r}")
 
     scores = to_scores(signal)
+    if end_time is not None:
+        # Scores after the report's last day cannot trade inside it.
+        late = scores.index.get_level_values("datetime") > pd.Timestamp(end_time)
+        if late.any():
+            logger.info("Ignoring %d scores dated after end_time %s", int(late.sum()), pd.Timestamp(end_time).date())
+            scores = scores[~late]
     if scores.empty:
         raise ValueError("The signal is empty")
     signal_days = pd.DatetimeIndex(scores.index.get_level_values("datetime").unique()).sort_values()

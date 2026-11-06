@@ -66,6 +66,17 @@ def test_a_score_trades_at_the_next_close_and_earns_the_day_after():
     assert result.config["end_time"] == "2024-01-04"
 
 
+def test_scores_after_end_time_are_ignored_and_unknown_days_without_it_are_an_error():
+    mkt = market({"A": [100, 110, 121, 121], "B": [100, 100, 90, 99]})
+    days = ["2024-01-01", "2024-01-02", "2024-01-10"]  # 01-10 is past the market's calendar
+    sig = signal(days, A=1.0, B=-1.0)
+    with pytest.raises(ValueError, match="not in the market's calendar"):
+        run(mkt, sig)
+    result = run(mkt, sig, end_time="2024-01-03")
+    assert list(result.report.index.strftime("%m-%d")) == ["01-02", "01-03"]
+    assert result.config["end_time"] == "2024-01-03"
+
+
 def test_the_return_is_the_label_of_the_targets():
     """Daily rebalancing without costs: the day's return is the targets' label, with funding:
     Ref($close, -2) / Ref($close, -1) - 1 - Ref($funding, -2) of the decision day."""

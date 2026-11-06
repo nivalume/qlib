@@ -15,6 +15,13 @@ data_handler_config: &data_handler_config
     fit_start_time: 2021-01-01
     fit_end_time: 2023-12-31
     instruments: *market
+    # Rank the label across each day. Alpha158's default z-score keeps a +500% day at 20 sigma;
+    # on 2022-2026 USDT-M data a LightGBM fitted to that stopped after 2 trees (a few distinct
+    # scores a day, tied at the book's edge). With ranks: 24 trees, ~100 distinct scores a day.
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs: {fields_group: label}
     # a score of day t trades at the close of t + 1 and is held to the close of t + 2;
     # a long pays that day's funding, a short receives it
     label: [["Ref($close, -2) / Ref($close, -1) - 1 - Ref($funding, -2)"], ["LABEL0"]]
