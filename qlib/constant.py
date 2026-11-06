@@ -10,6 +10,8 @@ import pandas as pd
 REG_CN = "cn"
 REG_US = "us"
 REG_TW = "tw"
+# Crypto: trades 24/7, in fractional amounts, with no price limit.
+REG_CRYPTO = "crypto"
 
 # Epsilon for avoiding division by zero.
 EPS = 1e-12

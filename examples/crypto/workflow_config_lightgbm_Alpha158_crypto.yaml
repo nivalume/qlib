@@ -1,0 +1,92 @@
+# USD-M perpetuals, daily cross-section: Alpha158 features, a LightGBM model, and a long-short
+# backtest with funding and per-instrument costs (qlib.contrib.crypto). See README.md here.
+#
+#   jarvis-data dump qlib --out ~/.qlib/qlib_data/crypto_um --top 100
+#   qrun examples/crypto/workflow_config_lightgbm_Alpha158_crypto.yaml
+#
+# The model and settings are starting points to research from, not a tuned strategy.
+qlib_init:
+    provider_uri: "~/.qlib/qlib_data/crypto_um"
+    region: crypto                     # no lot size, no price limit, 365 days a year
+market: &market top100                 # instruments/top100.txt: a point-in-time universe
+data_handler_config: &data_handler_config
+    start_time: 2021-01-01
+    end_time: null                     # to the last day of the data
+    fit_start_time: 2021-01-01
+    fit_end_time: 2023-12-31
+    instruments: *market
+    # Rank the label across each day. Alpha158's default z-score keeps a +500% day at 20 sigma;
+    # on 2022-2026 USDT-M data a LightGBM fitted to that stopped after 2 trees (a few distinct
+    # scores a day, tied at the book's edge). With ranks: 24 trees, ~100 distinct scores a day.
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs: {fields_group: label}
+    # a score of day t trades at the close of t + 1 and is held to the close of t + 2;
+    # a long pays that day's funding, a short receives it
+    label: [["Ref($close, -2) / Ref($close, -1) - 1 - Ref($funding, -2)"], ["LABEL0"]]
+perp_analysis_config: &perp_analysis_config
+    portfolio:
+        quantile: 0.1                  # long the top 10%, short the bottom 10% of the universe
+        gross: 1.0                     # half the equity long, half short
+        net: 0.0
+        weighting: equal
+        buffer: 2                      # a held name stays while within 2 ranks of its side
+        min_names: 20                  # fewer scored names: hold nothing
+    costs:
+        fee: 0.0005                    # taker fee a side
+        spread_tiers: [[1.0e+9, 0.0001], [1.0e+8, 0.0003], [2.0e+7, 0.0008], [0, 0.002]]
+        impact: 0.5                    # square-root impact; scales with the account
+        max_participation: 0.02        # at most 2% of a day's volume per instrument
+    backtest:
+        account: 1000000               # USDT: set it to the equity that will trade
+        delay: 1
+        rebalance: 1
+        deal_price: close
+        benchmark: null                # 0: the book is market neutral; BTCUSDT to compare
+        funding_missing: zero
+task:
+    model:
+        class: LGBModel
+        module_path: qlib.contrib.model.gbdt
+        kwargs:
+            loss: mse
+            learning_rate: 0.05
+            num_leaves: 63
+            max_depth: 6
+            colsample_bytree: 0.8
+            subsample: 0.8
+            subsample_freq: 1
+            lambda_l1: 1.0
+            lambda_l2: 1.0
+            min_data_in_leaf: 100
+            num_boost_round: 1000
+            early_stopping_rounds: 50
+            num_threads: 8
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: Alpha158
+                module_path: qlib.contrib.data.handler
+                kwargs: *data_handler_config
+            segments:
+                train: [2021-01-01, 2023-12-31]
+                valid: [2024-01-01, 2024-12-31]
+                test: [2025-01-01, 2099-12-31]
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            model: <MODEL>
+            dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+            ana_long_short: True
+            ann_scaler: 365
+        - class: PerpPortAnaRecord
+          module_path: qlib.contrib.crypto.record
+          kwargs:
+            config: *perp_analysis_config

@@ -47,6 +47,8 @@ The following are several important parameters of `qlib.init` (`Qlib` has a lot 
         Currently: ``qlib.constant.REG_US`` ('us') and ``qlib.constant.REG_CN`` ('cn') is supported. Different value of  `region` will result in different stock market mode.
         - ``qlib.constant.REG_US``: US stock market.
         - ``qlib.constant.REG_CN``: China stock market.
+        - ``qlib.constant.REG_TW``: Taiwan stock market.
+        - ``qlib.constant.REG_CRYPTO`` ('crypto'): crypto markets, which trade every day around the clock. No trade unit (amounts are fractional and not rounded), no price limit, the close as the deal price, a minute calendar of the whole day, and ``risk_analysis`` annualizes over 365 days (1440 minutes a day). The Exchange's other defaults are for stocks: pass ``min_cost=0`` and your own ``open_cost``/``close_cost``, and a benchmark that is in your data.
 
         Different modes will result in different trading limitations and costs.
         The region is just `shortcuts for defining a batch of configurations <https://github.com/microsoft/qlib/blob/528f74af099bf6156e9480bcd2bb28e453231212/qlib/config.py#L249>`_, which include minimal trading order unit (``trade_unit``),  trading limitation (``limit_threshold``) , etc.  It is not a necessary part and users can set the key configurations manually if the existing region setting can't meet their requirements.

@@ -18,6 +18,7 @@ from ..backtest import get_exchange, position, backtest as backtest_func, execut
 
 from ..data import D
 from ..config import C
+from ..constant import REG_CRYPTO
 from ..data.dataset.utils import get_level_index
 
 logger = get_module_logger("Evaluate")
@@ -38,7 +39,9 @@ def risk_analysis(r, N: int = None, freq: str = "day", mode: Literal["sum", "pro
     N: int
         scaler for annualizing information_ratio (day: 252, week: 50, month: 12), at least one of `N` and `freq` should exist
     freq: str
-        analysis frequency used for calculating the scaler, at least one of `N` and `freq` should exist
+        analysis frequency used for calculating the scaler, at least one of `N` and `freq` should exist.
+        The scaler follows the region: 238 trading days a year, 240 minutes a day by default;
+        365 days a year, 1440 minutes a day, 52 weeks in `REG_CRYPTO`, which trades every day.
     mode: Literal["sum", "product"]
         the method by which returns are accumulated:
         - "sum": Arithmetic accumulation (linear returns).
@@ -47,12 +50,20 @@ def risk_analysis(r, N: int = None, freq: str = "day", mode: Literal["sum", "pro
 
     def cal_risk_analysis_scaler(freq):
         _count, _freq = Freq.parse(freq)
-        _freq_scaler = {
-            Freq.NORM_FREQ_MINUTE: 240 * 238,
-            Freq.NORM_FREQ_DAY: 238,
-            Freq.NORM_FREQ_WEEK: 50,
-            Freq.NORM_FREQ_MONTH: 12,
-        }
+        if C.get("region") == REG_CRYPTO:
+            _freq_scaler = {
+                Freq.NORM_FREQ_MINUTE: 1440 * 365,
+                Freq.NORM_FREQ_DAY: 365,
+                Freq.NORM_FREQ_WEEK: 52,
+                Freq.NORM_FREQ_MONTH: 12,
+            }
+        else:
+            _freq_scaler = {
+                Freq.NORM_FREQ_MINUTE: 240 * 238,
+                Freq.NORM_FREQ_DAY: 238,
+                Freq.NORM_FREQ_WEEK: 50,
+                Freq.NORM_FREQ_MONTH: 12,
+            }
         return _freq_scaler[_freq] / _count
 
     if N is None and freq is None:
